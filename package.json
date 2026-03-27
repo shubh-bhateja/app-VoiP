@@ -1,0 +1,13 @@
+{
+  "name": "voicelink",
+  "version": "1.0.0",
+  "description": "VoIP app — run both servers with one command",
+  "scripts": {
+    "dev": "concurrently --names \"SERVER,CLIENT\" --prefix-colors \"cyan,magenta\" \"npm run server\" \"npm run client\"",
+    "server": "node server/index.js",
+    "client": "npm --prefix client run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
