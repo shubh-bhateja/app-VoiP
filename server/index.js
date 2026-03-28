@@ -2,9 +2,14 @@ const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const path = require('path');
 
 const app = express();
 app.use(cors());
+
+// Serve the frontend build
+const buildPath = path.join(__dirname, '../client/dist');
+app.use(express.static(buildPath));
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -79,6 +84,17 @@ io.on('connection', (socket) => {
   // ICE candidate relay
   socket.on('ice-candidate', ({ toSocketId, candidate }) => {
     io.to(toSocketId).emit('ice-candidate', { candidate });
+  });
+
+  // Chat message relay
+  socket.on('send-chat-message', ({ toSocketId, message, timestamp }) => {
+    console.log(`[chat] ${users[socket.id]} says: ${message}`);
+    io.to(toSocketId).emit('chat-message', {
+      fromSocketId: socket.id,
+      fromUsername: users[socket.id],
+      message,
+      timestamp
+    });
   });
 
   // ── Disconnect ────────────────────────────────────────────────────────────

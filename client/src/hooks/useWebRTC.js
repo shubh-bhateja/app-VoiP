@@ -8,7 +8,13 @@ const RTC_CONFIG = {
   ],
 };
 
-export function useWebRTC({ localVideoRef, remoteVideoRef, onCallEnded }) {
+// Global buffer for early ICE candidates that arrive before the CallPage mounts
+const globalIceBuffer = [];
+socket.on('ice-candidate', ({ candidate }) => {
+  globalIceBuffer.push(candidate);
+});
+
+export function useWebRTC({ localVideoRef, remoteVideoRef, onCallEnded, onConnectionStateChange }) {
   const pcRef = useRef(null);
   const localStreamRef = useRef(null);
   const pendingCandidatesRef = useRef([]);
@@ -37,9 +43,22 @@ export function useWebRTC({ localVideoRef, remoteVideoRef, onCallEnded }) {
       }
     };
 
+    pc.oniceconnectionstatechange = () => {
+      if (onConnectionStateChange) onConnectionStateChange(pc.iceConnectionState);
+    };
+
     pc.ontrack = (e) => {
       if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = e.streams[0];
+        if (e.streams && e.streams[0]) {
+          remoteVideoRef.current.srcObject = e.streams[0];
+        } else {
+          let inboundStream = remoteVideoRef.current.srcObject;
+          if (!inboundStream) {
+            inboundStream = new MediaStream();
+            remoteVideoRef.current.srcObject = inboundStream;
+          }
+          inboundStream.addTrack(e.track);
+        }
       }
     };
 
@@ -56,10 +75,16 @@ export function useWebRTC({ localVideoRef, remoteVideoRef, onCallEnded }) {
   const addPendingCandidates = useCallback(async () => {
     const pc = pcRef.current;
     if (!pc || !pc.remoteDescription) return;
-    for (const c of pendingCandidatesRef.current) {
+    
+    // Process local pending ones
+    const allCandidates = [...pendingCandidatesRef.current, ...globalIceBuffer];
+    pendingCandidatesRef.current = [];
+    globalIceBuffer.length = 0; // Clear global buffer once processed
+
+    for (const c of allCandidates) {
+      if (!c) continue;
       try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
     }
-    pendingCandidatesRef.current = [];
   }, []);
 
   // ── Call initiation (caller side) ────────────────────────────────────────
@@ -150,14 +175,18 @@ export function useWebRTC({ localVideoRef, remoteVideoRef, onCallEnded }) {
   // ── Socket event listeners ────────────────────────────────────────────────
 
   useEffect(() => {
-    socket.on('call-accepted', ({ answer }) => handleCallAccepted(answer));
-    socket.on('ice-candidate', ({ candidate }) => handleIceCandidate(candidate));
-    socket.on('call-ended', () => endCall());
+    const listenerAccept = ({ answer }) => handleCallAccepted(answer);
+    const listenerIce = ({ candidate }) => handleIceCandidate(candidate);
+    const listenerEnd = () => endCall();
+
+    socket.on('call-accepted', listenerAccept);
+    socket.on('ice-candidate', listenerIce);
+    socket.on('call-ended', listenerEnd);
 
     return () => {
-      socket.off('call-accepted');
-      socket.off('ice-candidate');
-      socket.off('call-ended');
+      socket.off('call-accepted', listenerAccept);
+      socket.off('ice-candidate', listenerIce);
+      socket.off('call-ended', listenerEnd);
     };
   }, [handleCallAccepted, handleIceCandidate, endCall]);
 

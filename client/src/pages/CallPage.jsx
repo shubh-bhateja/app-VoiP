@@ -5,9 +5,13 @@ import { socket } from '../socket';
 export default function CallPage({ me, peer, isIncoming, incomingOffer, onCallEnd }) {
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
+  const messagesEndRef = useRef(null);
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [callState, setCallState] = useState(isIncoming ? 'accepting' : 'calling');
+  const [messages, setMessages] = useState([]);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [newMessage, setNewMessage] = useState('');
   const initializedRef = useRef(false);
 
   const handleCallEnded = useCallback(() => {
@@ -18,6 +22,13 @@ export default function CallPage({ me, peer, isIncoming, incomingOffer, onCallEn
     localVideoRef,
     remoteVideoRef,
     onCallEnded: handleCallEnded,
+    onConnectionStateChange: (state) => {
+      if (state === 'connected' || state === 'completed') {
+        setCallState('active');
+      } else if (state === 'disconnected' || state === 'failed') {
+        handleEndCall();
+      }
+    }
   });
 
   // Initialize call once on mount
@@ -27,16 +38,33 @@ export default function CallPage({ me, peer, isIncoming, incomingOffer, onCallEn
 
     if (isIncoming) {
       acceptCall(peer.socketId, incomingOffer).then(() => {
-        setCallState('active');
+        setCallState('connecting');
       });
     } else {
       startCall(peer.socketId, me.username).then(() => {
         setCallState('ringing');
       });
-      // When the callee accepts, we go active
-      socket.once('call-accepted', () => setCallState('active'));
+      // When the callee accepts, we go connecting
+      socket.once('call-accepted', () => setCallState('connecting'));
     }
   }, []); // eslint-disable-line
+
+  // Listen for incoming chat messages
+  React.useEffect(() => {
+    const handleChatMessage = (msg) => {
+      setMessages((prev) => [...prev, { ...msg, isMine: false }]);
+      if (!isChatOpen) setIsChatOpen(true); // Auto-open chat on new message
+    };
+    socket.on('chat-message', handleChatMessage);
+    return () => socket.off('chat-message', handleChatMessage);
+  }, [isChatOpen]);
+
+  // Auto-scroll chat to bottom
+  React.useEffect(() => {
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages, isChatOpen]);
 
   const handleMute = () => {
     const nowMuted = toggleMute();
@@ -51,6 +79,19 @@ export default function CallPage({ me, peer, isIncoming, incomingOffer, onCallEn
   const handleEndCall = () => {
     socket.emit('end-call', { toSocketId: peer.socketId });
     endCall();
+  };
+
+  const handleSendMessage = (e) => {
+    e.preventDefault();
+    if (!newMessage.trim()) return;
+    const msgData = {
+      toSocketId: peer.socketId,
+      message: newMessage.trim(),
+      timestamp: Date.now(),
+    };
+    socket.emit('send-chat-message', msgData);
+    setMessages((prev) => [...prev, { ...msgData, isMine: true }]);
+    setNewMessage('');
   };
 
   const stateLabel = {
@@ -143,7 +184,57 @@ export default function CallPage({ me, peer, isIncoming, incomingOffer, onCallEn
           </button>
           <span style={styles.controlLabel}>{cameraOff ? 'Start Cam' : 'Stop Cam'}</span>
         </div>
+
+        {/* Chat toggle */}
+        <div style={styles.controlGroup}>
+          <button
+            className={`btn btn-icon ${isChatOpen ? 'btn-primary' : 'btn-ghost'}`}
+            id="chat-btn"
+            onClick={() => setIsChatOpen(!isChatOpen)}
+            title="Chat"
+            style={{ width: 56, height: 56, fontSize: '1.3rem' }}
+          >
+            💬
+          </button>
+          <span style={styles.controlLabel}>Chat</span>
+        </div>
       </div>
+
+      {/* Chat Sidebar */}
+      {isChatOpen && (
+        <div style={styles.chatSidebar}>
+          <div style={styles.chatHeader}>
+            <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Chat</h3>
+            <button className="btn btn-ghost" onClick={() => setIsChatOpen(false)} style={{ padding: '4px 8px', minWidth: 'auto' }}>✕</button>
+          </div>
+          
+          <div style={styles.chatMessages}>
+            {messages.length === 0 && (
+              <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.4)', marginTop: 20 }}>No messages yet...</p>
+            )}
+            {messages.map((m, i) => (
+              <div key={i} style={{ ...styles.messageWrapper, alignSelf: m.isMine ? 'flex-end' : 'flex-start' }}>
+                {!m.isMine && <div style={styles.messageSender}>{m.fromUsername}</div>}
+                <div style={{ ...styles.messageBubble, background: m.isMine ? 'var(--primary)' : 'rgba(255,255,255,0.1)' }}>
+                  {m.message}
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+
+          <form onSubmit={handleSendMessage} style={styles.chatForm}>
+            <input
+              type="text"
+              placeholder="Type a message..."
+              value={newMessage}
+              onChange={(e) => setNewMessage(e.target.value)}
+              style={styles.chatInput}
+            />
+            <button type="submit" className="btn btn-primary" style={{ padding: '8px 16px', borderRadius: 8 }}>Send</button>
+          </form>
+        </div>
+      )}
     </div>
   );
 }
@@ -252,5 +343,69 @@ const styles = {
   controlLabel: {
     fontSize: '0.75rem',
     color: 'rgba(255,255,255,0.6)',
+  },
+  chatSidebar: {
+    position: 'absolute',
+    top: 24,
+    right: 24,
+    bottom: 24,
+    width: 340,
+    background: 'rgba(20, 20, 25, 0.85)',
+    backdropFilter: 'blur(20px)',
+    border: '1px solid rgba(255, 255, 255, 0.1)',
+    borderRadius: 20,
+    display: 'flex',
+    flexDirection: 'column',
+    zIndex: 10,
+    overflow: 'hidden',
+    boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
+  },
+  chatHeader: {
+    padding: '16px 20px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  chatMessages: {
+    flex: 1,
+    overflowY: 'auto',
+    padding: 20,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  messageWrapper: {
+    display: 'flex',
+    flexDirection: 'column',
+    maxWidth: '85%',
+  },
+  messageSender: {
+    fontSize: '0.75rem',
+    color: 'rgba(255,255,255,0.5)',
+    marginBottom: 4,
+    marginLeft: 4,
+  },
+  messageBubble: {
+    padding: '10px 14px',
+    borderRadius: 16,
+    fontSize: '0.95rem',
+    lineHeight: 1.4,
+    wordBreak: 'break-word',
+  },
+  chatForm: {
+    padding: 16,
+    borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+    display: 'flex',
+    gap: 8,
+  },
+  chatInput: {
+    flex: 1,
+    background: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 8,
+    padding: '8px 12px',
+    color: 'var(--text)',
+    outline: 'none',
   },
 };

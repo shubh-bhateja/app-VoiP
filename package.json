@@ -4,10 +4,13 @@
   "description": "VoIP app — run both servers with one command",
   "scripts": {
     "dev": "concurrently --names \"SERVER,CLIENT\" --prefix-colors \"cyan,magenta\" \"npm run server\" \"npm run client\"",
+    "public": "concurrently --names \"API,UI,TUN_API,TUN_UI\" --prefix-colors \"cyan,magenta,blue,yellow\" \"npm run server\" \"npm run client\" \"npx localtunnel --port 3001 --subdomain voicelink-api-999\" \"npx localtunnel --port 5173 --subdomain voicelink-ui-999\"",
+    "host": "npm --prefix client run build && concurrently --names \"SERVER,TUNNEL\" --prefix-colors \"cyan,blue\" \"npm run server\" \"npx -y cloudflared tunnel --url http://localhost:3001\"",
     "server": "node server/index.js",
     "client": "npm --prefix client run dev"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "localtunnel": "^2.0.2"
   }
 }
